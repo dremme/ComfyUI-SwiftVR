@@ -149,6 +149,7 @@ def _advanced_defaults() -> dict[str, Any]:
         "queue_size": 2,
         "verbose": True,
         "clear_cache_after": True,
+        "target_resolution": "Use upscale multiplier",
     }
 
 
@@ -231,6 +232,10 @@ class SwiftVRAdvancedOptions:
             "queue_size": ("INT", {"default": 2, "min": 1, "max": 16}),
             "verbose": ("BOOLEAN", {"default": True}),
             "clear_cache_after": ("BOOLEAN", {"default": True}),
+        }, "optional": {
+            "target_resolution": ([
+                "Use upscale multiplier", "720p", "1080p", "1440p", "2160p"
+            ], {"default": "Use upscale multiplier"}),
         }}
 
     RETURN_TYPES = ("SWIFTVR_OPTIONS",)
@@ -239,7 +244,8 @@ class SwiftVRAdvancedOptions:
     CATEGORY = "SwiftVR/Settings"
 
     def build(self, upscale, clip_len, dit_overlap, fps, quality, save_format, ffmpeg_preset,
-              queue_size, verbose, clear_cache_after):
+              queue_size, verbose, clear_cache_after,
+              target_resolution="Use upscale multiplier"):
         return ({
             "upscale": upscale,
             "clip_len": clip_len,
@@ -251,6 +257,7 @@ class SwiftVRAdvancedOptions:
             "queue_size": queue_size,
             "verbose": verbose,
             "clear_cache_after": clear_cache_after,
+            "target_resolution": target_resolution,
         },)
 
 
@@ -284,12 +291,16 @@ class SwiftVRRestoreVideo:
         stats_path = _default_stats_path(output_path, "")
         cache_message = ""
         upscale = int(opts["upscale"])
+        target_resolution = opts["target_resolution"]
+        if target_resolution == "Use upscale multiplier":
+            target_resolution = None
 
         try:
             stats = swiftvr_pipe.restore_video(
                 str(input_path),
                 str(output_path),
                 resolution=None,
+                target_resolution=target_resolution,
                 upscale=upscale,
                 clip_len=int(opts["clip_len"]),
                 dit_overlap=int(opts["dit_overlap"]),

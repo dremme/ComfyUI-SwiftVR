@@ -35,6 +35,13 @@ _DTYPES = {"float16": torch.float16, "fp16": torch.float16,
            "bfloat16": torch.bfloat16, "bf16": torch.bfloat16,
            "float32": torch.float32, "fp32": torch.float32}
 
+_TARGET_RESOLUTIONS = {
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "1440p": (2560, 1440),
+    "2160p": (3840, 2160),
+}
+
 
 def _as_dtype(dtype) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
@@ -114,9 +121,33 @@ class SwiftVRPipeline:
     # Helpers                                                            #
     # ------------------------------------------------------------------ #
 
-    def _target_size(self, lq_h, lq_w, resolution, upscale):
+    def _target_size(self, lq_h, lq_w, resolution, upscale, target_resolution=None):
+        if resolution is not None and target_resolution is not None:
+            raise ValueError("resolution and target_resolution cannot be used together")
         if resolution is not None:
             out_w, out_h = int(resolution[0]), int(resolution[1])
+        elif target_resolution is not None:
+            try:
+                landscape_w, landscape_h = _TARGET_RESOLUTIONS[str(target_resolution)]
+            except KeyError as exc:
+                choices = ", ".join(_TARGET_RESOLUTIONS)
+                raise ValueError(
+                    f"Unsupported target_resolution {target_resolution!r}. Choose {choices}."
+                ) from exc
+
+            if lq_w >= lq_h:
+                max_w, max_h = landscape_w, landscape_h
+            else:
+                max_w, max_h = landscape_h, landscape_w
+
+            if max_w * lq_h <= max_h * lq_w:
+                out_w = max_w
+                out_h = (lq_h * max_w) // lq_w
+            else:
+                out_h = max_h
+                out_w = (lq_w * max_h) // lq_h
+            out_w = max(2, (out_w // 2) * 2)
+            out_h = max(2, (out_h // 2) * 2)
         else:
             out_h, out_w = lq_h * upscale, lq_w * upscale
         return out_h, out_w, _aligned_pad(out_h), _aligned_pad(out_w)
@@ -143,6 +174,7 @@ class SwiftVRPipeline:
         output_path,
         *,
         resolution: Optional[Tuple[int, int]] = None,
+        target_resolution: Optional[str] = None,
         upscale: int = 4,
         clip_len: int = 24,
         dit_overlap: int = 0,
@@ -156,10 +188,18 @@ class SwiftVRPipeline:
     ) -> dict:
         """Restore a whole video file or image folder.
 
-        ``resolution`` is the output ``(width, height)``; if omitted the output
-        is the low-quality input upscaled by ``upscale``. ``clip_len`` must be a
-        multiple of 4.
+        ``resolution`` is the exact output ``(width, height)``. Alternatively,
+        ``target_resolution`` fits the input proportionally within a standard
+        resolution such as ``1080p``. If both are omitted, the low-quality input
+        is upscaled by ``upscale``. ``clip_len`` must be a multiple of 4.
         """
+        if resolution is not None and target_resolution is not None:
+            raise ValueError("resolution and target_resolution cannot be used together")
+        if target_resolution is not None and str(target_resolution) not in _TARGET_RESOLUTIONS:
+            choices = ", ".join(_TARGET_RESOLUTIONS)
+            raise ValueError(
+                f"Unsupported target_resolution {target_resolution!r}. Choose {choices}."
+            )
         if clip_len % 4 != 0:
             raise ValueError(f"clip_len must be a multiple of 4, got {clip_len}")
         if not self._prepared:
@@ -171,7 +211,8 @@ class SwiftVRPipeline:
         raw_total, lq_h, lq_w, src_fps = get_video_info(input_path, fallback_fps=fps or 30)
         total_frames = 4 * ((raw_total - 1) // 4) + 1
 
-        out_h, out_w, pad_h, pad_w = self._target_size(lq_h, lq_w, resolution, upscale)
+        out_h, out_w, pad_h, pad_w = self._target_size(
+            lq_h, lq_w, resolution, upscale, target_resolution)
         final_video_path, png_output_dir = self._resolve_output(input_path, output_path, png_save)
         png_frame_names = (selected_output_frame_names(input_path)
                            if (png_save and input_path.is_dir()) else None)
@@ -220,9 +261,19 @@ class SwiftVRPipeline:
         finally:
             if temp_rendered_path is not None:
                 temp_rendered_path.unlink(missing_ok=True)
+        if resolution is not None:
+            size_mode = "explicit_resolution"
+        elif target_resolution is not None:
+            size_mode = "target_resolution"
+        else:
+            size_mode = "upscale"
         return {"frames": written, "seconds": wall,
                 "fps": (written / wall if wall > 0 else 0.0),
-                "output": str(png_output_dir if png_save else final_video_path)}
+                "output": str(png_output_dir if png_save else final_video_path),
+                "size_mode": size_mode,
+                "target_resolution": target_resolution,
+                "output_width": out_w,
+                "output_height": out_h}
 
     # ------------------------------------------------------------------ #
     # Streaming (chunk by chunk, causal)                                 #
