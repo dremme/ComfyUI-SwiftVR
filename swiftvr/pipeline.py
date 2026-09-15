@@ -10,6 +10,8 @@ embedding, and exposes both an offline whole-file API (``restore_video``) and a
 causal chunk-by-chunk API (``stream``).
 """
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -23,6 +25,7 @@ from .io import (
     selected_output_frame_names,
     preprocess_clip_uint8,
     crop_spatial_padding_ntchw,
+    mux_source_audio,
     VIDEO_EXTS,
 )
 from .runner import run_pipeline, enable_max_fps_runtime
@@ -173,31 +176,50 @@ class SwiftVRPipeline:
         png_frame_names = (selected_output_frame_names(input_path)
                            if (png_save and input_path.is_dir()) else None)
 
+        rendered_video_path = final_video_path
+        temp_rendered_path = None
+        if not png_save and input_path.is_file():
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{final_video_path.stem}.video_",
+                suffix=final_video_path.suffix,
+                dir=str(final_video_path.parent),
+            )
+            os.close(fd)
+            temp_rendered_path = Path(temp_name)
+            temp_rendered_path.unlink(missing_ok=True)
+            rendered_video_path = temp_rendered_path
+
         self.dit_stream.overlap = dit_overlap
 
-        written, wall = run_pipeline(
-            video_path=input_path,
-            final_output_path=str(final_video_path),
-            png_output_dir=str(png_output_dir),
-            tae_stream=self.tae_stream,
-            dit_stream=self.dit_stream,
-            prompt_emb=self.prompt_emb,
-            device=self.device,
-            dtype=self.dtype,
-            total_frames=total_frames,
-            clip_len=clip_len,
-            lq_h=lq_h, lq_w=lq_w,
-            out_h=out_h, out_w=out_w, pad_h=pad_h, pad_w=pad_w,
-            upscale_mode=self.upscale_mode,
-            source_fps=(fps or src_fps),
-            png_save=png_save,
-            quality=quality,
-            save_format=save_format,
-            ffmpeg_preset=ffmpeg_preset,
-            queue_size=queue_size,
-            png_frame_names=png_frame_names,
-            verbose=verbose,
-        )
+        try:
+            written, wall = run_pipeline(
+                video_path=input_path,
+                final_output_path=str(rendered_video_path),
+                png_output_dir=str(png_output_dir),
+                tae_stream=self.tae_stream,
+                dit_stream=self.dit_stream,
+                prompt_emb=self.prompt_emb,
+                device=self.device,
+                dtype=self.dtype,
+                total_frames=total_frames,
+                clip_len=clip_len,
+                lq_h=lq_h, lq_w=lq_w,
+                out_h=out_h, out_w=out_w, pad_h=pad_h, pad_w=pad_w,
+                upscale_mode=self.upscale_mode,
+                source_fps=(fps or src_fps),
+                png_save=png_save,
+                quality=quality,
+                save_format=save_format,
+                ffmpeg_preset=ffmpeg_preset,
+                queue_size=queue_size,
+                png_frame_names=png_frame_names,
+                verbose=verbose,
+            )
+            if temp_rendered_path is not None:
+                mux_source_audio(temp_rendered_path, input_path, final_video_path)
+        finally:
+            if temp_rendered_path is not None:
+                temp_rendered_path.unlink(missing_ok=True)
         return {"frames": written, "seconds": wall,
                 "fps": (written / wall if wall > 0 else 0.0),
                 "output": str(png_output_dir if png_save else final_video_path)}

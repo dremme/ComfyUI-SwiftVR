@@ -6,6 +6,8 @@ either an mp4 (libx265) or a PNG sequence.
 
 import os
 import math
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
@@ -13,6 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import imageio
+import imageio_ffmpeg
 from PIL import Image
 
 import decord
@@ -198,6 +201,52 @@ def open_stream_video_writer(output_path, fps=8, video_format="", preset="", qua
     pix = "yuv444p" if video_format == "yuv444p" else "yuv420p"
     return imageio.get_writer(output_path, fps=fps, codec="libx265", pixelformat=pix,
                              macro_block_size=None, ffmpeg_params=["-crf", str(crf)] + extra)
+
+
+def mux_source_audio(rendered_video_path, source_video_path, output_path):
+    """Combine restored video with every audio stream from the source video.
+
+    The restored video stream is always copied. Audio is copied without quality
+    loss when the output container supports its codec, with AAC as a compatibility
+    fallback (primarily for MP4/MOV outputs). The temporary mux output keeps an
+    existing destination intact if ffmpeg fails.
+    """
+    rendered = Path(rendered_video_path)
+    source = Path(source_video_path)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, mux_name = tempfile.mkstemp(
+        prefix=f".{output.stem}.mux_", suffix=output.suffix, dir=str(output.parent))
+    os.close(fd)
+    mux_path = Path(mux_name)
+    mux_path.unlink(missing_ok=True)
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    common = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(rendered), "-i", str(source),
+        "-map", "0:v:0", "-map", "1:a?",
+        "-c:v", "copy", "-shortest",
+    ]
+    attempts = (
+        common[:-1] + ["-c:a", "copy", common[-1], str(mux_path)],
+        common[:-1] + ["-c:a", "aac", "-b:a", "192k", common[-1], str(mux_path)],
+    )
+
+    errors = []
+    try:
+        for command in attempts:
+            mux_path.unlink(missing_ok=True)
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            if result.returncode == 0 and mux_path.is_file():
+                os.replace(mux_path, output)
+                return
+            errors.append((result.stderr or result.stdout or "unknown ffmpeg error").strip())
+        detail = errors[-1] if errors else "unknown ffmpeg error"
+        raise RuntimeError(f"Could not preserve source audio: {detail}")
+    finally:
+        mux_path.unlink(missing_ok=True)
 
 
 def _normalize_png_name(name: str) -> str:

@@ -129,6 +129,8 @@ Inputs:
 Behavior:
 
 - Runs SwiftVR video restoration/upscale.
+- Preserves the input video's audio tracks in the restored video. Audio is
+  stream-copied when supported by the output container, with an AAC fallback.
 - Always writes MP4 output.
 - Automatically writes a stats JSON next to the MP4.
 - Shows the restored video preview inside the node UI when ComfyUI can serve the file.
