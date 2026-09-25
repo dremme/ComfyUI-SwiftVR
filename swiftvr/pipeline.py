@@ -10,6 +10,7 @@ embedding, and exposes both an offline whole-file API (``restore_video``) and a
 causal chunk-by-chunk API (``stream``).
 """
 
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -121,11 +122,20 @@ class SwiftVRPipeline:
     # Helpers                                                            #
     # ------------------------------------------------------------------ #
 
-    def _target_size(self, lq_h, lq_w, resolution, upscale, target_resolution=None):
-        if resolution is not None and target_resolution is not None:
-            raise ValueError("resolution and target_resolution cannot be used together")
+    def _target_size(self, lq_h, lq_w, resolution, upscale, target_resolution=None,
+                     target_megapixels=None):
+        if sum(value is not None for value in
+               (resolution, target_resolution, target_megapixels)) > 1:
+            raise ValueError("Choose only one output size: resolution, target_resolution, or target_megapixels")
         if resolution is not None:
             out_w, out_h = int(resolution[0]), int(resolution[1])
+        elif target_megapixels is not None:
+            target_pixels = float(target_megapixels) * 1_000_000
+            if not math.isfinite(target_pixels) or target_pixels <= 0:
+                raise ValueError("target_megapixels must be a positive finite number")
+            scale = math.sqrt(target_pixels / (lq_w * lq_h))
+            out_w = max(2, 2 * round(lq_w * scale / 2))
+            out_h = max(2, 2 * round(lq_h * scale / 2))
         elif target_resolution is not None:
             try:
                 landscape_w, landscape_h = _TARGET_RESOLUTIONS[str(target_resolution)]
@@ -175,6 +185,7 @@ class SwiftVRPipeline:
         *,
         resolution: Optional[Tuple[int, int]] = None,
         target_resolution: Optional[str] = None,
+        target_megapixels: Optional[float] = None,
         upscale: int = 4,
         clip_len: int = 24,
         dit_overlap: int = 0,
@@ -190,11 +201,17 @@ class SwiftVRPipeline:
 
         ``resolution`` is the exact output ``(width, height)``. Alternatively,
         ``target_resolution`` fits the input proportionally within a standard
-        resolution such as ``1080p``. If both are omitted, the low-quality input
-        is upscaled by ``upscale``. ``clip_len`` must be a multiple of 4.
+        resolution such as ``1080p``. ``target_megapixels`` scales proportionally
+        to approximately that many million pixels. If all three are omitted,
+        the input is upscaled by ``upscale``. ``clip_len`` must be a multiple of 4.
         """
-        if resolution is not None and target_resolution is not None:
-            raise ValueError("resolution and target_resolution cannot be used together")
+        if sum(value is not None for value in
+               (resolution, target_resolution, target_megapixels)) > 1:
+            raise ValueError("Choose only one output size: resolution, target_resolution, or target_megapixels")
+        if target_megapixels is not None:
+            target_megapixels = float(target_megapixels)
+            if not math.isfinite(target_megapixels) or target_megapixels <= 0:
+                raise ValueError("target_megapixels must be a positive finite number")
         if target_resolution is not None and str(target_resolution) not in _TARGET_RESOLUTIONS:
             choices = ", ".join(_TARGET_RESOLUTIONS)
             raise ValueError(
@@ -212,7 +229,7 @@ class SwiftVRPipeline:
         total_frames = 4 * ((raw_total - 1) // 4) + 1
 
         out_h, out_w, pad_h, pad_w = self._target_size(
-            lq_h, lq_w, resolution, upscale, target_resolution)
+            lq_h, lq_w, resolution, upscale, target_resolution, target_megapixels)
         final_video_path, png_output_dir = self._resolve_output(input_path, output_path, png_save)
         png_frame_names = (selected_output_frame_names(input_path)
                            if (png_save and input_path.is_dir()) else None)
@@ -263,6 +280,8 @@ class SwiftVRPipeline:
                 temp_rendered_path.unlink(missing_ok=True)
         if resolution is not None:
             size_mode = "explicit_resolution"
+        elif target_megapixels is not None:
+            size_mode = "target_megapixels"
         elif target_resolution is not None:
             size_mode = "target_resolution"
         else:
@@ -272,6 +291,7 @@ class SwiftVRPipeline:
                 "output": str(png_output_dir if png_save else final_video_path),
                 "size_mode": size_mode,
                 "target_resolution": target_resolution,
+                "target_megapixels": target_megapixels,
                 "output_width": out_w,
                 "output_height": out_h}
 

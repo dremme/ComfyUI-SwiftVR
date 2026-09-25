@@ -102,12 +102,13 @@ Connect its `VIDEO` output directly into **SwiftVR Restore Video**.
 
 ### SwiftVR Advanced Options
 
-Optional settings for runtime, upscale, and encoding.
+Optional settings for runtime, output size, and encoding.
 
-- `upscale`: output scale from `2` to `4`.
-- `target_resolution`: use the upscale multiplier, or fit proportionally within
-  720p, 1080p, 1440p, or 2160p. A target resolution overrides `upscale`, keeps
-  the source aspect ratio, and does not add cropping or black bars.
+- `target_megapixels`: choose `2 MP` or `4 MP` (default `2 MP`). SwiftVR scales
+  to approximately that many pixels while preserving the source aspect ratio,
+  including 16:9, 4:3, 3:2, and their portrait orientations. For example,
+  4:3 at 2 MP becomes about 1632×1224. Dimensions are rounded to even pixels
+  for video encoding.
 - `clip_len`: temporal chunk size; must be a multiple of 4.
 - `dit_overlap`: temporal overlap for DiT blending. `0` is the default.
 - `fps`: `0` keeps the source FPS.

@@ -139,7 +139,7 @@ def _video_source_path(video: Any) -> tuple[Path, Path | None]:
 
 def _advanced_defaults() -> dict[str, Any]:
     return {
-        "upscale": 2,
+        "target_megapixels": "2 MP",
         "clip_len": 16,
         "dit_overlap": 0,
         "fps": 0.0,
@@ -149,7 +149,6 @@ def _advanced_defaults() -> dict[str, Any]:
         "queue_size": 2,
         "verbose": True,
         "clear_cache_after": True,
-        "target_resolution": "Use upscale multiplier",
     }
 
 
@@ -222,7 +221,7 @@ class SwiftVRAdvancedOptions:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "upscale": ("INT", {"default": 2, "min": 2, "max": 4, "step": 1}),
+            "target_megapixels": (["2 MP", "4 MP"], {"default": "2 MP"}),
             "clip_len": ("INT", {"default": 16, "min": 4, "max": 128, "step": 4}),
             "dit_overlap": ("INT", {"default": 0, "min": 0, "max": 8}),
             "fps": ("FLOAT", {"default": 0.0, "min": 0.0}),
@@ -232,22 +231,26 @@ class SwiftVRAdvancedOptions:
             "queue_size": ("INT", {"default": 2, "min": 1, "max": 16}),
             "verbose": ("BOOLEAN", {"default": True}),
             "clear_cache_after": ("BOOLEAN", {"default": True}),
-        }, "optional": {
-            "target_resolution": ([
-                "Use upscale multiplier", "720p", "1080p", "1440p", "2160p"
-            ], {"default": "Use upscale multiplier"}),
         }}
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, target_megapixels):
+        # Saved workflows from the older numeric widget contain 2 or 4.
+        if target_megapixels in ("2 MP", "4 MP", 2, 4):
+            return True
+        return "Choose 2 MP or 4 MP"
 
     RETURN_TYPES = ("SWIFTVR_OPTIONS",)
     RETURN_NAMES = ("options",)
     FUNCTION = "build"
     CATEGORY = "SwiftVR/Settings"
 
-    def build(self, upscale, clip_len, dit_overlap, fps, quality, save_format, ffmpeg_preset,
-              queue_size, verbose, clear_cache_after,
-              target_resolution="Use upscale multiplier"):
+    def build(self, target_megapixels, clip_len, dit_overlap, fps, quality, save_format,
+              ffmpeg_preset, queue_size, verbose, clear_cache_after):
+        if target_megapixels in (2, 4):
+            target_megapixels = f"{int(target_megapixels)} MP"
         return ({
-            "upscale": upscale,
+            "target_megapixels": target_megapixels,
             "clip_len": clip_len,
             "dit_overlap": dit_overlap,
             "fps": fps,
@@ -257,7 +260,6 @@ class SwiftVRAdvancedOptions:
             "queue_size": queue_size,
             "verbose": verbose,
             "clear_cache_after": clear_cache_after,
-            "target_resolution": target_resolution,
         },)
 
 
@@ -286,22 +288,20 @@ class SwiftVRRestoreVideo:
 
     def restore(self, swiftvr_pipe, video, output_dir, filename, options=None):
         opts = _normalize_options(options)
+        target_megapixels = float(str(opts["target_megapixels"]).removesuffix(" MP"))
+        if target_megapixels not in (2.0, 4.0):
+            raise ValueError("SwiftVR target_megapixels must be 2 MP or 4 MP")
         input_path, temp_input_path = _video_source_path(video)
         output_path = _default_output_path(input_path, output_dir, filename)
         stats_path = _default_stats_path(output_path, "")
         cache_message = ""
-        upscale = int(opts["upscale"])
-        target_resolution = opts["target_resolution"]
-        if target_resolution == "Use upscale multiplier":
-            target_resolution = None
 
         try:
             stats = swiftvr_pipe.restore_video(
                 str(input_path),
                 str(output_path),
                 resolution=None,
-                target_resolution=target_resolution,
-                upscale=upscale,
+                target_megapixels=target_megapixels,
                 clip_len=int(opts["clip_len"]),
                 dit_overlap=int(opts["dit_overlap"]),
                 fps=None if float(opts["fps"]) <= 0 else float(opts["fps"]),
@@ -328,7 +328,6 @@ class SwiftVRRestoreVideo:
         stats["input"] = str(input_path)
         stats["output"] = str(preview_path)
         stats["stats"] = str(stats_path)
-        stats["upscale"] = upscale
 
         stats_path.parent.mkdir(parents=True, exist_ok=True)
         stats_path.write_text(_stats_json(stats) + "\n", encoding="utf-8")
